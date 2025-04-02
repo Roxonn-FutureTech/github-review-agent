@@ -99,6 +99,34 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 * Comment complex algorithms or business logic
 * Update API documentation for any endpoint changes
 
+<<<<<<< HEAD
+=======
+## Logging Guidelines
+
+When adding new code, follow these logging practices:
+
+1. Always use the project's logging system:
+   ```python
+   from ai_engine.logging_config import get_logger
+   
+   logger = get_logger(__name__)
+   ```
+
+2. Use appropriate log levels:
+   - ERROR: For errors that prevent normal operation
+   - WARNING: For unexpected but handled situations
+   - INFO: For significant events in normal operation
+   - DEBUG: For detailed debugging information
+
+3. Include relevant context in log messages:
+   ```python
+   logger.info(f"Processing file: {filename}")
+   logger.error(f"Failed to parse {filename}", extra={'error': str(e)})
+   ```
+
+4. Log files are stored in the `logs` directory with automatic rotation
+
+>>>>>>> feature/ai-engine-core
 ## Testing
 
 * Write unit tests for new features
@@ -160,3 +188,7 @@ Contributors will be recognized in:
 * Release notes
 
 Thank you for contributing to GitHub Review Agent! 🎉
+<<<<<<< HEAD
+=======
+
+>>>>>>> feature/ai-engine-core

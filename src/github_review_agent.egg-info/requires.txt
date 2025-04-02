@@ -1,4 +1,6 @@
 transformers
 torch
-scikit-learn
+networkx
 numpy
+scikit-learn
+requests

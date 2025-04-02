@@ -1,0 +1,13 @@
+Metadata-Version: 2.2
+Name: github-review-agent
+Version: 0.1
+Requires-Python: >=3.8
+License-File: LICENSE
+Requires-Dist: transformers
+Requires-Dist: torch
+Requires-Dist: networkx
+Requires-Dist: numpy
+Requires-Dist: scikit-learn
+Requires-Dist: requests
+Dynamic: requires-dist
+Dynamic: requires-python
