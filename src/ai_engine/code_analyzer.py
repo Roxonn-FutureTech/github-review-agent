@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torch._utils")
+
 from typing import Dict, List, Optional
 import ast
 import os
@@ -29,6 +32,9 @@ class CodeAnalyzer:
     def scan_repository(self, repo_path: str) -> Dict:
         """Scans repository and builds knowledge base."""
         try:
+            if not os.path.exists(repo_path):
+                raise FileNotFoundError(f"Repository path not found: {repo_path}")
+            
             self.logger.info(f"Starting repository scan: {repo_path}")
             self.files = self._collect_files(repo_path)
             self.logger.info(f"Found {len(self.files)} source files")
@@ -42,7 +48,10 @@ class CodeAnalyzer:
             knowledge = self._build_knowledge_representation()
             self.logger.info("Knowledge base built successfully")
             return knowledge
-            
+        
+        except FileNotFoundError as e:
+            self.logger.error(f"Repository path not found: {str(e)}")
+            raise CodeParsingError(f"Failed to scan repository: {str(e)}")
         except Exception as e:
             self.logger.error(f"Repository scan failed: {str(e)}")
             raise CodeParsingError(f"Failed to scan repository: {str(e)}")
@@ -61,29 +70,43 @@ class CodeAnalyzer:
             raise CodeParsingError(f"Failed to collect files: {str(e)}")
 
     def _parse_files(self) -> Dict:
-        """Parses files into AST for analysis."""
+        """Parses source files into AST trees."""
         ast_trees = {}
-        for file in self.files:
+        for file_path in self.files:
             try:
-                with open(file, 'r', encoding='utf-8') as f:
+                with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    ast_trees[file] = {
-                        'ast': ast.parse(content),
-                        'content': content
-                    }
-                    self.logger.debug(f"Successfully parsed {file}")
-            except (SyntaxError, UnicodeDecodeError) as e:
-                self.logger.warning(f"Failed to parse {file}: {str(e)}")
-                continue
+                ast_trees[file_path] = {
+                    'ast': ast.parse(content),
+                    'content': content
+                }
+            except SyntaxError as e:
+                self.logger.error(f"Failed to parse {file_path}: {str(e)}")
+                raise CodeParsingError(f"Invalid syntax in {file_path}: {str(e)}")
             except Exception as e:
-                self.logger.error(f"Unexpected error parsing {file}: {str(e)}")
-                raise CodeParsingError(f"Failed to parse {file}: {str(e)}")
+                self.logger.error(f"Failed to parse {file_path}: {str(e)}")
+                raise CodeParsingError(f"Failed to parse {file_path}: {str(e)}")
         return ast_trees
 
     def _analyze_dependencies(self) -> Dict:
         """Analyzes dependencies between files."""
         try:
-            return self.dependency_analyzer.analyze(self.ast_trees)
+            dependencies = {}
+            for file_path, tree_info in self.ast_trees.items():
+                imports = []
+                for node in ast.walk(tree_info['ast']):
+                    if isinstance(node, ast.Import):
+                        for name in node.names:
+                            imports.append({'module': name.name, 'type': 'import'})
+                    elif isinstance(node, ast.ImportFrom):
+                        for name in node.names:
+                            imports.append({
+                                'module': node.module,
+                                'name': name.name,
+                                'type': 'importfrom'
+                            })
+                dependencies[file_path] = {'imports': imports}
+            return dependencies
         except Exception as e:
             self.logger.error(f"Dependency analysis failed: {str(e)}")
             raise DependencyAnalysisError(str(e))

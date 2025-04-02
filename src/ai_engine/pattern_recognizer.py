@@ -1,6 +1,7 @@
 import logging
 import numpy as np
 import torch
+import ast
 from sklearn.cluster import DBSCAN
 from typing import List, Dict
 from .exceptions import PatternAnalysisError
@@ -66,26 +67,52 @@ class PatternRecognizer:
             raise PatternAnalysisError(f"Failed to cluster patterns: {str(e)}")
 
     def analyze(self, ast_trees: Dict) -> List[Dict]:
-        """Analyzes code patterns in the given AST trees."""
-        try:
-            self.logger.info("Starting pattern analysis")
-            code_blocks = [tree['content'] for tree in ast_trees.values()]
-            
-            # Generate embeddings
-            embeddings = self._get_embeddings(code_blocks)
-            self.logger.info(f"Generated embeddings for {len(code_blocks)} code blocks")
-            
-            # Cluster patterns
-            clusters = self._cluster_patterns(embeddings)
-            
-            # Analyze clusters
-            patterns = self._analyze_clusters(clusters, code_blocks)
-            self.logger.info(f"Analysis complete: found {len(patterns)} patterns")
-            
-            return patterns
-        except Exception as e:
-            self.logger.error(f"Pattern analysis failed: {str(e)}")
-            raise PatternAnalysisError(f"Failed to analyze patterns: {str(e)}")
+        """Analyzes AST trees to identify code patterns."""
+        patterns = []
+        for file_path, tree_info in ast_trees.items():
+            tree = tree_info['ast']
+            class_scope = None  # Track if we're inside a class
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    class_scope = node
+                    patterns.append({
+                        'type': 'class_definition',
+                        'name': node.name,
+                        'file': file_path,
+                        'pattern_type': 'class',
+                        'data': {'name': node.name},
+                        'frequency': 1
+                    })
+                    # Add methods within the class
+                    for item in node.body:
+                        if isinstance(item, ast.FunctionDef):
+                            patterns.append({
+                                'type': 'method_definition',
+                                'name': item.name,
+                                'file': file_path,
+                                'pattern_type': 'method',
+                                'data': {
+                                    'name': item.name,
+                                    'class': node.name
+                                },
+                                'frequency': 1
+                            })
+                elif isinstance(node, ast.FunctionDef) and not class_scope:
+                    pattern = {
+                        'type': 'function_definition',
+                        'name': node.name,
+                        'file': file_path,
+                        'pattern_type': 'function',
+                        'data': {'name': node.name},
+                        'frequency': 1
+                    }
+                    if node.decorator_list:
+                        pattern['type'] = 'decorator'
+                        pattern['pattern_type'] = 'decorator'
+                    patterns.append(pattern)
+                if isinstance(node, ast.ClassDef):
+                    class_scope = None  # Reset class scope when exiting class
+        return patterns
     
     def _analyze_clusters(self, clusters: np.ndarray, code_blocks: List[str]) -> List[Dict]:
         """Analyzes and categorizes identified patterns."""
@@ -129,8 +156,3 @@ class PatternRecognizer:
             return 'loop_pattern'
         else:
             return 'general_code_pattern'
-
-
-
-
-

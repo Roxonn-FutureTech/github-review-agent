@@ -81,3 +81,34 @@ class TestKnowledgeBase(unittest.TestCase):
         # Test limit
         results = self.kb.query_knowledge({'limit': 1})
         self.assertEqual(len(results), 1)
+
+    def test_store_and_retrieve_patterns(self):
+        """Test storing and retrieving code patterns"""
+        patterns = [
+            {'type': 'class', 'name': 'TestClass', 'file': 'test.py'},
+            {'type': 'function', 'name': 'test_func', 'file': 'test.py'}
+        ]
+        self.kb.store_patterns(patterns)
+        
+        retrieved = self.kb.get_patterns('test.py')
+        self.assertEqual(len(retrieved), 2)
+        self.assertEqual(retrieved[0]['type'], 'class')
+        self.assertEqual(retrieved[1]['type'], 'function')
+
+    def test_knowledge_graph_operations(self):
+        """Test knowledge graph building and querying"""
+        nodes = [
+            ('file1.py', {'type': 'file'}),
+            ('file2.py', {'type': 'file'}),
+            ('ClassA', {'type': 'class'})
+        ]
+        edges = [
+            ('file1.py', 'ClassA', {'type': 'contains'}),
+            ('file2.py', 'file1.py', {'type': 'imports'})
+        ]
+        
+        self.kb.build_graph(nodes, edges)
+        
+        # Test graph queries
+        self.assertTrue(self.kb.has_dependency('file2.py', 'file1.py'))
+        self.assertEqual(len(self.kb.get_related_components('file1.py')), 2)

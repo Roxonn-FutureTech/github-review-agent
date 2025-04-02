@@ -2,7 +2,9 @@ import unittest
 from unittest.mock import Mock, patch
 import os
 import ast
+import shutil
 from src.ai_engine.code_analyzer import CodeAnalyzer
+from src.ai_engine.exceptions import CodeParsingError
 
 class TestCodeAnalyzer(unittest.TestCase):
     def setUp(self):
@@ -26,13 +28,11 @@ class TestCodeAnalyzer(unittest.TestCase):
                 f.write(content)
 
     def tearDown(self):
-        # Clean up test files
-        for filename in self.sample_files:
-            try:
-                os.remove(os.path.join(self.test_dir, filename))
-            except OSError:
-                pass
-        os.rmdir(self.test_dir)
+        # Clean up test files and directory
+        try:
+            shutil.rmtree(self.test_dir)
+        except OSError:
+            pass
 
     def test_collect_files(self):
         files = self.analyzer._collect_files(self.test_dir)
@@ -105,4 +105,41 @@ class TestCodeAnalyzer(unittest.TestCase):
         self.assertEqual(knowledge['patterns'], mock_patterns)
         self.assertEqual(len(knowledge['files']), 2)
         self.assertEqual(len(knowledge['dependencies']), 2)
+
+    def test_scan_repository_error_handling(self):
+        """Test error handling in scan_repository method"""
+        with self.assertRaises(CodeParsingError):
+            self.analyzer.scan_repository("non_existent_path")
+
+    def test_parse_files_with_invalid_syntax(self):
+        """Test handling of invalid Python syntax"""
+        with open(os.path.join(self.test_dir, 'invalid.py'), 'w') as f:
+            f.write("def invalid_syntax(:")  # Invalid syntax
+        
+        self.analyzer.files = [os.path.join(self.test_dir, 'invalid.py')]
+        with self.assertRaises(CodeParsingError):
+            self.analyzer._parse_files()
+
+    def test_analyze_dependencies_with_complex_imports(self):
+        """Test dependency analysis with various import types"""
+        self.analyzer.ast_trees = {
+            'complex.py': {
+                'ast': ast.parse(
+                    'import os, sys\n'
+                    'from datetime import datetime as dt\n'
+                    'from .local_module import func\n'
+                    'from ..parent_module import Class\n'
+                ),
+                'content': ''
+            }
+        }
+        
+        deps = self.analyzer._analyze_dependencies()
+        self.assertIn('complex.py', deps)
+        imports = deps['complex.py']['imports']
+        self.assertTrue(any(imp['module'] == 'os' for imp in imports))
+        self.assertTrue(any(imp['module'] == 'sys' for imp in imports))
+        self.assertTrue(any(imp['module'] == 'datetime' for imp in imports))
+        self.assertTrue(any(imp['module'] == 'local_module' for imp in imports))
+        self.assertTrue(any(imp['module'] == 'parent_module' for imp in imports))
 
