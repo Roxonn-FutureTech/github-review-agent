@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-.env
-=======
 *.pyc
 __pycache__/
 .coverage
 .env
->>>>>>> feature/ai-engine-core

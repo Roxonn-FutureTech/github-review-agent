@@ -99,8 +99,6 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 * Comment complex algorithms or business logic
 * Update API documentation for any endpoint changes
 
-<<<<<<< HEAD
-=======
 ## Logging Guidelines
 
 When adding new code, follow these logging practices:
@@ -125,8 +123,6 @@ When adding new code, follow these logging practices:
    ```
 
 4. Log files are stored in the `logs` directory with automatic rotation
-
->>>>>>> feature/ai-engine-core
 ## Testing
 
 * Write unit tests for new features
@@ -188,7 +184,3 @@ Contributors will be recognized in:
 * Release notes
 
 Thank you for contributing to GitHub Review Agent! 🎉
-<<<<<<< HEAD
-=======
-
->>>>>>> feature/ai-engine-core
