@@ -12,7 +12,7 @@ private_key = os.getenv("GITHUB_PRIVATE_KEY")
 
 print(f"App ID: {app_id}")
 print(f"Original private key length: {len(private_key) if private_key else 0}")
-print(f"Original private key: {private_key}")
+print("Original private key: [REDACTED]")
 
 # Fix the private key format
 if private_key:
