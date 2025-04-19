@@ -24,18 +24,24 @@ if private_key:
         formatted_key += "\n-----END RSA PRIVATE KEY-----"
         
         # Update the .env file
-        with open(env_path, 'r') as file:
-            env_content = file.read()
-        
-        # Replace the private key
-        new_env_content = env_content.replace(
-            f"GITHUB_PRIVATE_KEY={private_key}",
-            f"GITHUB_PRIVATE_KEY={formatted_key}"
-        )
-        
-        with open(env_path, 'w') as file:
-            file.write(new_env_content)
-        
+        try:
+            with open(env_path, 'r') as file:
+                env_content = file.read()
+            
+            # Replace the private key
+            new_env_content = env_content.replace(
+                f"GITHUB_PRIVATE_KEY={private_key}",
+                f"GITHUB_PRIVATE_KEY={formatted_key}"
+            )
+            
+            with open(env_path, 'w') as file:
+                file.write(new_env_content)
+            
+            print(f"\nPrivate key has been formatted and saved to {env_path}")
+            print(f"New private key length: {len(formatted_key)}")
+        except IOError as e:
+            print(f"\nError updating .env file: {str(e)}")
+            sys.exit(1)
         print(f"\nPrivate key has been formatted and saved to {env_path}")
         print(f"New private key length: {len(formatted_key)}")
     else:
