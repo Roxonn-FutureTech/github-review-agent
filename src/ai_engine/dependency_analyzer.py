@@ -146,7 +146,7 @@ class DependencyAnalyzer:
                     # Convert relative imports to absolute
                     if imp.startswith('.'):
                         # Simple conversion - might need to be more sophisticated
-                        target = file_path.rsplit('/', 1)[0] + '/' + imp.lstrip('.')
+                        target = f"{file_path.rsplit('/', 1)[0]}/{imp.lstrip('.')}.py"
                         if target in files:
                             self.graph.add_edge(file_path, target, type='imports')
                             # Add imported symbols if available
