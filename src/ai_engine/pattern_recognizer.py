@@ -386,19 +386,6 @@ class PatternRecognizer:
 
         return True
 
-    def analyze_code_patterns(self, code: str) -> Dict[str, Any]:
-        """Analyzes code for common patterns and anti-patterns."""
-        try:
-            tree = ast.parse(code)
-            return {
-                'code_smells': self.recognize_code_smells(tree),
-                'design_patterns': self.identify_design_patterns(tree),
-                'complexity_metrics': self.calculate_complexity_metrics(tree)
-            }
-        except SyntaxError as e:
-            self.logger.error(f"Failed to analyze code patterns: {str(e)}")
-            return {'error': str(e)}
-
     def recognize_code_smells(self, tree: ast.AST) -> Set[str]:
         """Identifies common code smells in the AST."""
         smells = set()
