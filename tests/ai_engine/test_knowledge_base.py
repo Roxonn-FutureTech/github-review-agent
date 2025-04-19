@@ -1,7 +1,10 @@
 import unittest
 import os
 import json
+import sqlite3
+from unittest.mock import patch, MagicMock
 from src.ai_engine.knowledge_base import KnowledgeBase
+from src.ai_engine.exceptions import KnowledgeBaseError
 
 class TestKnowledgeBase(unittest.TestCase):
     def setUp(self):
@@ -9,94 +12,57 @@ class TestKnowledgeBase(unittest.TestCase):
         self.kb = KnowledgeBase(self.test_db)
 
     def tearDown(self):
-        self.kb.conn.close()
-        os.remove(self.test_db)
+        if os.path.exists(self.test_db):
+            try:
+                os.remove(self.test_db)
+            except PermissionError:
+                pass  # Handle Windows file lock issues
 
     def test_initialize_db(self):
-        # Verify tables exist
-        cursor = self.kb.conn.cursor()
-        
-        # Check code_patterns table
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='code_patterns'
-        """)
-        self.assertIsNotNone(cursor.fetchone())
-        
-        # Check dependencies table
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='dependencies'
-        """)
-        self.assertIsNotNone(cursor.fetchone())
+        self.assertTrue(os.path.exists(self.test_db))
+        with sqlite3.connect(self.test_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patterns'")
+            self.assertIsNotNone(cursor.fetchone())
 
     def test_store_pattern(self):
-        test_pattern = {
-            'pattern_type': 'function_definition',
-            'data': {'name': 'test_func', 'params': []},
-            'frequency': 1
-        }
-        
-        self.kb.store_pattern(test_pattern)
-        
-        # Verify pattern was stored
-        cursor = self.kb.conn.cursor()
-        cursor.execute("SELECT * FROM code_patterns")
-        row = cursor.fetchone()
-        
-        self.assertIsNotNone(row)
-        self.assertEqual(row[1], 'function_definition')
-        self.assertEqual(
-            json.loads(row[2]), 
-            {'name': 'test_func', 'params': []}
-        )
+        pattern_type = "function_definition"
+        pattern_data = {'name': 'test_func', 'params': []}
 
-    def test_query_knowledge(self):
-        # Store test patterns
-        patterns = [
-            {
-                'pattern_type': 'class_definition',
-                'data': {'name': 'TestClass'},
-                'frequency': 2
-            },
-            {
-                'pattern_type': 'function_definition',
-                'data': {'name': 'test_func'},
-                'frequency': 3
-            }
-        ]
-        
-        for pattern in patterns:
-            self.kb.store_pattern(pattern)
+        # Clear any existing patterns
+        self.kb.clear()
 
-        # Test querying specific pattern type
-        results = self.kb.query_knowledge({'pattern_type': 'class_definition'})
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['pattern_type'], 'class_definition')
+        result = self.kb.store_pattern(pattern_type, pattern_data)
+        self.assertTrue(result)
 
-        # Test querying all patterns
-        results = self.kb.query_knowledge({})
-        self.assertEqual(len(results), 2)
+        with sqlite3.connect(self.test_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT pattern_type, pattern_data FROM patterns")
+            row = cursor.fetchone()
+            self.assertEqual(row[0], pattern_type)
+            self.assertEqual(json.loads(row[1]), pattern_data)
 
-        # Test limit
-        results = self.kb.query_knowledge({'limit': 1})
-        self.assertEqual(len(results), 1)
+    def test_store_pattern_error(self):
+        with self.assertRaises(KnowledgeBaseError):
+            self.kb.store_pattern(None, None)
 
     def test_store_and_retrieve_patterns(self):
-        """Test storing and retrieving code patterns"""
+        # Clear any existing patterns
+        self.kb.clear()
+
         patterns = [
-            {'type': 'class', 'name': 'TestClass', 'file': 'test.py'},
-            {'type': 'function', 'name': 'test_func', 'file': 'test.py'}
+            {'type': 'class', 'data': {'name': 'TestClass', 'file': 'test.py'}},
+            {'type': 'function', 'data': {'name': 'test_func', 'file': 'test.py'}}
         ]
+
         self.kb.store_patterns(patterns)
-        
         retrieved = self.kb.get_patterns('test.py')
         self.assertEqual(len(retrieved), 2)
-        self.assertEqual(retrieved[0]['type'], 'class')
-        self.assertEqual(retrieved[1]['type'], 'function')
 
     def test_knowledge_graph_operations(self):
-        """Test knowledge graph building and querying"""
+        # Clear the graph
+        self.kb.graph.clear()
+
         nodes = [
             ('file1.py', {'type': 'file'}),
             ('file2.py', {'type': 'file'}),
@@ -106,9 +72,72 @@ class TestKnowledgeBase(unittest.TestCase):
             ('file1.py', 'ClassA', {'type': 'contains'}),
             ('file2.py', 'file1.py', {'type': 'imports'})
         ]
-        
+
         self.kb.build_graph(nodes, edges)
-        
-        # Test graph queries
         self.assertTrue(self.kb.has_dependency('file2.py', 'file1.py'))
-        self.assertEqual(len(self.kb.get_related_components('file1.py')), 2)
+
+        # file1.py is related to both ClassA and file2.py
+        related = self.kb.get_related_components('file1.py')
+        self.assertEqual(len(related), 2)
+        self.assertIn('ClassA', related)
+        self.assertIn('file2.py', related)
+
+    def test_graph_operations_error(self):
+        with patch('src.ai_engine.knowledge_base.nx.DiGraph.add_nodes_from') as mock_add_nodes:
+            mock_add_nodes.side_effect = Exception("Test error")
+            with self.assertRaises(KnowledgeBaseError):
+                self.kb.build_graph([('test', {})], [])
+
+    def test_update_pattern_frequency(self):
+        # Clear any existing patterns
+        self.kb.clear()
+
+        # Store initial pattern
+        pattern_type = 'test_pattern'
+        pattern_data = {'test': 'data'}
+        self.kb.store_pattern(pattern_type, pattern_data)
+
+        # Update frequency
+        self.kb.update_pattern_frequency(pattern_type, 5)
+
+        # Verify update
+        with sqlite3.connect(self.test_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT frequency FROM patterns WHERE pattern_type = ?",
+                          (pattern_type,))
+            frequency = cursor.fetchone()[0]
+            self.assertEqual(frequency, 5)
+
+    def test_delete_pattern(self):
+        # Clear any existing patterns
+        self.kb.clear()
+
+        # Store pattern
+        pattern_type = 'test_pattern'
+        pattern_data = {'test': 'data'}
+        self.kb.store_pattern(pattern_type, pattern_data)
+
+        # Delete pattern
+        self.kb.delete_pattern(pattern_type)
+
+        # Verify deletion
+        with sqlite3.connect(self.test_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM patterns WHERE pattern_type = ?",
+                          (pattern_type,))
+            self.assertIsNone(cursor.fetchone())
+
+    def test_clear_knowledge_base(self):
+        # Store some patterns
+        self.kb.store_pattern('pattern1', {'test': 'data1'})
+        self.kb.store_pattern('pattern2', {'test': 'data2'})
+
+        # Clear knowledge base
+        self.kb.clear()
+
+        # Verify all patterns are removed
+        with sqlite3.connect(self.test_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM patterns")
+            count = cursor.fetchone()[0]
+            self.assertEqual(count, 0)

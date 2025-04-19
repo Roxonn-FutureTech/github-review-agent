@@ -1,145 +1,205 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch, MagicMock, mock_open
 import os
 import ast
-import shutil
 from src.ai_engine.code_analyzer import CodeAnalyzer
-from src.ai_engine.exceptions import CodeParsingError
 
 class TestCodeAnalyzer(unittest.TestCase):
     def setUp(self):
-        # Mock the transformer models to avoid loading them during tests
-        with patch('transformers.AutoTokenizer.from_pretrained'), \
-             patch('transformers.AutoModel.from_pretrained'):
-            self.analyzer = CodeAnalyzer()
+        self.analyzer = CodeAnalyzer()
+        self.test_repo_path = "test_repo"
         
-        # Create test directory structure
-        self.test_dir = "test_repo"
-        os.makedirs(self.test_dir, exist_ok=True)
-        
-        # Create sample files
-        self.sample_files = {
-            'main.py': 'def main():\n    print("Hello")\n',
-            'utils.py': 'import os\n\ndef helper():\n    pass\n'
-        }
-        
-        for filename, content in self.sample_files.items():
-            with open(os.path.join(self.test_dir, filename), 'w') as f:
-                f.write(content)
-
-    def tearDown(self):
-        # Clean up test files and directory
-        try:
-            shutil.rmtree(self.test_dir)
-        except OSError:
-            pass
-
     def test_collect_files(self):
-        files = self.analyzer._collect_files(self.test_dir)
-        self.assertEqual(len(files), 2)
-        self.assertTrue(any(f.endswith('main.py') for f in files))
-        self.assertTrue(any(f.endswith('utils.py') for f in files))
+        mock_files = [
+            "test_repo/file1.py",
+            "test_repo/subdir/file2.py",
+            "test_repo/.git/config",  # Should be ignored
+            "test_repo/file3.txt"     # Should be ignored
+        ]
+        
+        with patch('os.walk') as mock_walk:
+            mock_walk.return_value = [
+                ("test_repo", [], ["file1.py"]),
+                ("test_repo/subdir", [], ["file2.py"]),
+                ("test_repo/.git", [], ["config"]),
+                ("test_repo", [], ["file3.txt"])
+            ]
+            
+            files = self.analyzer._collect_files(self.test_repo_path)
+            self.assertEqual(len(files), 2)
+            self.assertIn("test_repo/file1.py", files)
+            self.assertIn("test_repo/subdir/file2.py", files)
 
     def test_parse_files(self):
-        self.analyzer.files = [
-            os.path.join(self.test_dir, 'main.py'),
-            os.path.join(self.test_dir, 'utils.py')
-        ]
-        ast_trees = self.analyzer._parse_files()
+        test_content = """
+def test_function():
+    return "Hello"
+
+class TestClass:
+    def method(self):
+        pass
+"""
+        mock_file_content = mock_open(read_data=test_content)
         
-        self.assertEqual(len(ast_trees), 2)
-        for file_path, tree_data in ast_trees.items():
-            self.assertIsInstance(tree_data['ast'], ast.AST)
-            self.assertIsInstance(tree_data['content'], str)
+        with patch('builtins.open', mock_file_content):
+            with patch.object(self.analyzer, 'files', ["test.py"]):
+                ast_trees = self.analyzer._parse_files()
+                
+                self.assertEqual(len(ast_trees), 1)
+                self.assertIsInstance(ast_trees["test.py"], ast.Module)
+                
+                # Verify AST structure
+                function_def = False
+                class_def = False
+                for node in ast.walk(ast_trees["test.py"]):
+                    if isinstance(node, ast.FunctionDef):
+                        function_def = True
+                    elif isinstance(node, ast.ClassDef):
+                        class_def = True
+                
+                self.assertTrue(function_def)
+                self.assertTrue(class_def)
+
+    def test_parse_files_with_syntax_error(self):
+        invalid_content = """
+def invalid_function()
+    return "Missing colon"
+"""
+        mock_file_content = mock_open(read_data=invalid_content)
+        
+        with patch('builtins.open', mock_file_content):
+            with patch.object(self.analyzer, 'files', ["invalid.py"]):
+                with self.assertLogs(level='ERROR'):
+                    ast_trees = self.analyzer._parse_files()
+                    self.assertEqual(len(ast_trees), 0)
 
     def test_analyze_dependencies(self):
-        # Mock AST trees
-        self.analyzer.ast_trees = {
-            'utils.py': {
-                'ast': ast.parse('import os\nimport sys'),
-                'content': 'import os\nimport sys'
-            }
-        }
+        test_content = """
+import os
+from datetime import datetime
+from .local_module import LocalClass
+"""
+        mock_file_content = mock_open(read_data=test_content)
         
-        deps = self.analyzer._analyze_dependencies()
-        self.assertIn('utils.py', deps)
-        self.assertTrue(len(deps['utils.py']['imports']) > 0)
+        with patch('builtins.open', mock_file_content):
+            with patch.object(self.analyzer, 'files', ["test.py"]):
+                self.analyzer._parse_files()
+                deps = self.analyzer._analyze_dependencies()
+                
+                self.assertIn("test.py", deps)
+                self.assertEqual(len(deps["test.py"]), 3)
+                self.assertIn("os", deps["test.py"])
+                self.assertIn("datetime", deps["test.py"])
+                self.assertIn(".local_module", deps["test.py"])
 
     def test_build_knowledge_representation(self):
-        # Setup test data
-        self.analyzer.files = [
-            os.path.join(self.test_dir, 'main.py'),
-            os.path.join(self.test_dir, 'utils.py')
-        ]
-        
-        # Mock the pattern recognizer to return dummy patterns
-        mock_patterns = [
-            {'type': 'function', 'content': 'def main(): pass'},
-            {'type': 'import', 'content': 'import os'}
-        ]
-        self.analyzer.pattern_recognizer.analyze = Mock(return_value=mock_patterns)
-        
-        # Add ast_trees setup
+        # Mock AST trees and dependencies
         self.analyzer.ast_trees = {
-            'main.py': {
-                'ast': ast.parse('def main(): pass'),
-                'content': 'def main(): pass'
-            },
-            'utils.py': {
-                'ast': ast.parse('import os'),
-                'content': 'import os'
-            }
+            "test.py": ast.parse("""
+class TestClass:
+    def method(self):
+        pass
+""")
         }
+        
         self.analyzer.dependencies = {
-            'main.py': {'imports': []},
-            'utils.py': {'imports': [{'module': 'os'}]}
+            "test.py": ["os", "datetime"]
         }
         
         knowledge = self.analyzer._build_knowledge_representation()
         
-        # Verify the structure and content of the knowledge base
-        self.assertIn('files', knowledge)
-        self.assertIn('dependencies', knowledge)
-        self.assertIn('patterns', knowledge)
-        self.assertIn('graph', knowledge)
-        self.assertEqual(knowledge['patterns'], mock_patterns)
-        self.assertEqual(len(knowledge['files']), 2)
-        self.assertEqual(len(knowledge['dependencies']), 2)
+        self.assertIn("classes", knowledge)
+        self.assertIn("functions", knowledge)
+        self.assertIn("dependencies", knowledge)
+        self.assertEqual(len(knowledge["classes"]), 1)
+        self.assertEqual(len(knowledge["functions"]), 1)
+        self.assertEqual(len(knowledge["dependencies"]), 2)
 
-    def test_scan_repository_error_handling(self):
-        """Test error handling in scan_repository method"""
-        with self.assertRaises(CodeParsingError):
-            self.analyzer.scan_repository("non_existent_path")
+    def test_scan_repository(self):
+        with patch.object(self.analyzer, '_collect_files') as mock_collect:
+            with patch.object(self.analyzer, '_parse_files') as mock_parse:
+                with patch.object(self.analyzer, '_analyze_dependencies') as mock_deps:
+                    with patch.object(self.analyzer, '_build_knowledge_representation') as mock_knowledge:
+                        
+                        mock_collect.return_value = ["test.py"]
+                        mock_parse.return_value = {"test.py": ast.parse("")}
+                        mock_deps.return_value = {"test.py": ["os"]}
+                        mock_knowledge.return_value = {"test": "data"}
+                        
+                        result = self.analyzer.scan_repository(self.test_repo_path)
+                        
+                        mock_collect.assert_called_once_with(self.test_repo_path)
+                        mock_parse.assert_called_once()
+                        mock_deps.assert_called_once()
+                        mock_knowledge.assert_called_once()
+                        self.assertEqual(result, {"test": "data"})
 
-    def test_parse_files_with_invalid_syntax(self):
-        """Test handling of invalid Python syntax"""
-        with open(os.path.join(self.test_dir, 'invalid.py'), 'w') as f:
-            f.write("def invalid_syntax(:")  # Invalid syntax
+    def test_scan_repository_nonexistent_path(self):
+        with self.assertRaises(FileNotFoundError):
+            self.analyzer.scan_repository("nonexistent/path")
+
+    def test_extract_patterns(self):
+        test_content = """
+def test_function(arg1, arg2=None):
+    '''Test function docstring'''
+    return arg1 + arg2
+
+class TestClass:
+    def __init__(self):
+        self.value = 0
         
-        self.analyzer.files = [os.path.join(self.test_dir, 'invalid.py')]
-        with self.assertRaises(CodeParsingError):
-            self.analyzer._parse_files()
-
-    def test_analyze_dependencies_with_complex_imports(self):
-        """Test dependency analysis with various import types"""
-        self.analyzer.ast_trees = {
-            'complex.py': {
-                'ast': ast.parse(
-                    'import os, sys\n'
-                    'from datetime import datetime as dt\n'
-                    'from .local_module import func\n'
-                    'from ..parent_module import Class\n'
-                ),
-                'content': ''
-            }
-        }
+    @property
+    def prop(self):
+        return self.value
+"""
+        ast_tree = ast.parse(test_content)
+        patterns = self.analyzer._extract_patterns(ast_tree)
         
-        deps = self.analyzer._analyze_dependencies()
-        self.assertIn('complex.py', deps)
-        imports = deps['complex.py']['imports']
-        self.assertTrue(any(imp['module'] == 'os' for imp in imports))
-        self.assertTrue(any(imp['module'] == 'sys' for imp in imports))
-        self.assertTrue(any(imp['module'] == 'datetime' for imp in imports))
-        self.assertTrue(any(imp['module'] == 'local_module' for imp in imports))
-        self.assertTrue(any(imp['module'] == 'parent_module' for imp in imports))
+        self.assertIn("function_patterns", patterns)
+        self.assertIn("class_patterns", patterns)
+        self.assertTrue(any(p["name"] == "test_function" for p in patterns["function_patterns"]))
+        self.assertTrue(any(p["name"] == "TestClass" for p in patterns["class_patterns"]))
 
+    def test_analyze_complexity(self):
+        test_content = """
+def complex_function(x):
+    if x > 0:
+        if x < 10:
+            return "Medium"
+        else:
+            return "High"
+    else:
+        return "Low"
+"""
+        ast_tree = ast.parse(test_content)
+        complexity = self.analyzer._analyze_complexity(ast_tree)
+        
+        self.assertGreater(complexity["cyclomatic_complexity"], 1)
+        self.assertIn("cognitive_complexity", complexity)
+
+    def test_get_file_statistics(self):
+        test_content = """
+import os
+import sys
+
+def func1():
+    pass
+
+def func2():
+    pass
+
+class TestClass:
+    def method1(self):
+        pass
+"""
+        with patch('builtins.open', mock_open(read_data=test_content)):
+            stats = self.analyzer.get_file_statistics("test.py")
+            
+            self.assertEqual(stats["num_functions"], 2)
+            self.assertEqual(stats["num_classes"], 1)
+            self.assertEqual(stats["num_imports"], 2)
+            self.assertIn("loc", stats)
+            self.assertIn("complexity", stats)
+
+if __name__ == '__main__':
+    unittest.main()

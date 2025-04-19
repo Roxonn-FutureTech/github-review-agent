@@ -1,8 +1,12 @@
-<<<<<<< HEAD
-.env
-=======
+# Python
 *.pyc
 __pycache__/
-.coverage
+
+# Environment variables
 .env
->>>>>>> feature/ai-engine-core
+.env.*
+!.env.example
+*.env.example
+# Coverage
+.coverage
+htmlcov/

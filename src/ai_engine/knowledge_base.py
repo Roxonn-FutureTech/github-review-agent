@@ -1,169 +1,198 @@
 import sqlite3
 import json
-import logging
-from typing import Dict, List, Optional
-from .exceptions import KnowledgeBaseError
 import networkx as nx
-from .logging_config import get_logger
-
-logger = logging.getLogger(__name__)
+from typing import Dict, List, Any, Optional
+from pathlib import Path
+from .exceptions import KnowledgeBaseError
 
 class KnowledgeBase:
+    """Manages code knowledge and patterns."""
+
     def __init__(self, db_path: str = "knowledge.db"):
-        self.logger = get_logger(__name__)
         self.db_path = db_path
-        self.graph = nx.DiGraph()  # Initialize graph in constructor
-        self.conn = sqlite3.connect(self.db_path)  # Initialize database connection
-        self._initialize_db()
-    
-    def __del__(self):
-        """Cleanup database connection on object destruction."""
-        if hasattr(self, 'conn'):
-            self.conn.close()
-    
-    def _initialize_db(self):
-        """Initializes database tables."""
+        self.graph = nx.DiGraph()
+        self.conn = None
+        self.initialize_db()
+
+    def initialize_db(self) -> None:
+        """Initialize the SQLite database."""
         try:
-            with self.conn:
-                self.conn.execute("""
-                    CREATE TABLE IF NOT EXISTS code_patterns (
-                        id INTEGER PRIMARY KEY,
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS patterns (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
                         pattern_type TEXT NOT NULL,
                         pattern_data TEXT NOT NULL,
-                        frequency INTEGER DEFAULT 1
+                        frequency INTEGER DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                
-                self.conn.execute("""
-                    CREATE TABLE IF NOT EXISTS dependencies (
-                        id INTEGER PRIMARY KEY,
-                        source_file TEXT NOT NULL,
-                        target_file TEXT NOT NULL,
-                        dependency_type TEXT NOT NULL
-                    )
-                """)
-            self.logger.debug("Database tables initialized")
+                conn.commit()
         except Exception as e:
-            self.logger.error(f"Database initialization failed: {str(e)}")
-            raise KnowledgeBaseError(f"Failed to create tables: {str(e)}")
-    
-    def store_pattern(self, pattern: Dict):
-        """Stores a code pattern in the database."""
+            raise KnowledgeBaseError(f"Failed to initialize database: {str(e)}")
+
+    def store_pattern(self, pattern_type: str, pattern_data: Dict[str, Any], frequency: int = 1) -> bool:
+        """Store a code pattern in the database."""
         try:
-            # Use pattern_type directly from input
-            pattern_type = pattern.get('pattern_type')
-            pattern_data = json.dumps(pattern.get('data', {}))
-            frequency = pattern.get('frequency', 1)
-            
-            with self.conn:
-                self.conn.execute(
-                    """
-                    INSERT INTO code_patterns (pattern_type, pattern_data, frequency)
+            if pattern_type is None or pattern_data is None:
+                raise ValueError("Pattern type and data cannot be None")
+
+            pattern_data_json = json.dumps(pattern_data)
+
+            with sqlite3.connect(self.db_path) as conn:
+                self.conn = conn  # Store connection for test access
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO patterns (pattern_type, pattern_data, frequency)
                     VALUES (?, ?, ?)
-                    """,
-                    (pattern_type, pattern_data, frequency)
-                )
-            self.logger.debug(f"Stored pattern: {pattern_type}")
+                """, (pattern_type, pattern_data_json, frequency))
+                conn.commit()
+            return True
         except Exception as e:
-            self.logger.error(f"Failed to store pattern: {str(e)}")
             raise KnowledgeBaseError(f"Failed to store pattern: {str(e)}")
 
-    def get_patterns(self, file_path: str) -> List[Dict]:
-        """Retrieves all patterns for a specific file."""
-        try:
-            cursor = self.conn.execute(
-                """
-                SELECT pattern_type, pattern_data, frequency 
-                FROM code_patterns 
-                WHERE json_extract(pattern_data, '$.file') = ?
-                """,
-                (file_path,)
-            )
-            
-            patterns = []
-            for row in cursor:
-                patterns.append({
-                    'type': row[0],
-                    'data': json.loads(row[1]),
-                    'frequency': row[2]
-                })
-            return patterns
-        except Exception as e:
-            self.logger.error(f"Failed to retrieve patterns: {str(e)}")
-            raise KnowledgeBaseError(f"Failed to retrieve patterns: {str(e)}")
-
-    def build_graph(self, nodes, edges):
-        """Build knowledge graph from nodes and edges"""
-        # Clear existing graph
-        self.graph.clear()
-        
-        # Add nodes and edges
-        for node, attrs in nodes:
-            self.graph.add_node(node, **attrs)
-        for src, dst, attrs in edges:
-            self.graph.add_edge(src, dst, **attrs)
-
-    def get_related_components(self, node):
-        """Get all components related to a node"""
-        # Get both predecessors and successors
-        related = list(self.graph.predecessors(node)) + list(self.graph.successors(node))
-        return list(set(related))  # Remove duplicates
-
-    def has_dependency(self, source, target):
-        """Check if source depends on target"""
-        return self.graph.has_edge(source, target)
-
-    def query_knowledge(self, query: Dict) -> List[Dict]:
-        """Query the knowledge base for patterns matching specific criteria."""
-        try:
-            cursor = self.conn.cursor()
-            
-            # Build the SQL query based on the filter criteria
-            sql = "SELECT pattern_type, pattern_data, frequency FROM code_patterns"
-            params = []
-            
-            # Add WHERE clause if pattern_type is specified
-            if 'pattern_type' in query:
-                sql += " WHERE pattern_type = ?"
-                params.append(query['pattern_type'])
-                
-            # Add LIMIT if specified
-            if 'limit' in query:
-                sql += " LIMIT ?"
-                params.append(query['limit'])
-                
-            cursor.execute(sql, params)
-            rows = cursor.fetchall()
-            
-            # Convert rows to list of dictionaries
-            results = []
-            for row in rows:
-                results.append({
-                    'pattern_type': row[0],
-                    'data': json.loads(row[1]),
-                    'frequency': row[2]
-                })
-                
-            return results
-        except Exception as e:
-            self.logger.error(f"Failed to query knowledge base: {str(e)}")
-            raise KnowledgeBaseError(f"Query failed: {str(e)}")
-
-    def store_patterns(self, patterns: List[Dict]) -> None:
-        """Store multiple patterns in the database."""
+    def store_patterns(self, patterns: List[Dict[str, Any]]) -> bool:
+        """Store multiple patterns at once."""
         try:
             for pattern in patterns:
-                # Convert the pattern format to match store_pattern expectations
-                converted_pattern = {
-                    'pattern_type': pattern['type'],
-                    'data': {
-                        'name': pattern['name'],
-                        'file': pattern['file']
-                    },
-                    'frequency': 1  # Default frequency for new patterns
-                }
-                self.store_pattern(converted_pattern)
-            self.logger.debug(f"Stored {len(patterns)} patterns")
+                pattern_type = pattern.get('type')
+                pattern_data = pattern.get('data')
+                if pattern_type and pattern_data:
+                    self.store_pattern(pattern_type, pattern_data)
+            return True
         except Exception as e:
-            self.logger.error(f"Failed to store patterns: {str(e)}")
             raise KnowledgeBaseError(f"Failed to store patterns: {str(e)}")
+
+    def retrieve_patterns(self, pattern_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieve patterns from the database."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                if pattern_type:
+                    cursor.execute("""
+                        SELECT pattern_type, pattern_data, frequency
+                        FROM patterns
+                        WHERE pattern_type = ?
+                    """, (pattern_type,))
+                else:
+                    cursor.execute("""
+                        SELECT pattern_type, pattern_data, frequency
+                        FROM patterns
+                    """)
+
+                patterns = []
+                for row in cursor.fetchall():
+                    patterns.append({
+                        'pattern_type': row[0],
+                        'data': json.loads(row[1]),
+                        'frequency': row[2]
+                    })
+                return patterns
+        except Exception as e:
+            raise KnowledgeBaseError(f"Failed to retrieve patterns: {str(e)}")
+
+    def update_pattern_frequency(self, pattern_type: str, new_frequency: int) -> bool:
+        """Update the frequency of a pattern."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                self.conn = conn  # Store connection for test access
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE patterns
+                    SET frequency = ?
+                    WHERE pattern_type = ?
+                """, (new_frequency, pattern_type))
+                conn.commit()
+            return True
+        except Exception as e:
+            raise KnowledgeBaseError(f"Failed to update pattern frequency: {str(e)}")
+
+    def delete_pattern(self, pattern_type: str) -> bool:
+        """Delete a pattern from the database."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                self.conn = conn  # Store connection for test access
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM patterns WHERE pattern_type = ?", (pattern_type,))
+                conn.commit()
+            return True
+        except Exception as e:
+            raise KnowledgeBaseError(f"Failed to delete pattern: {str(e)}")
+
+    def clear(self) -> bool:
+        """Clear all patterns from the database."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                self.conn = conn  # Store connection for test access
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM patterns")
+                conn.commit()
+            return True
+        except Exception as e:
+            raise KnowledgeBaseError(f"Failed to clear knowledge base: {str(e)}")
+
+    def build_graph(self, nodes: List[tuple], edges: List[tuple]) -> None:
+        """Build a knowledge graph."""
+        try:
+            self.graph.clear()
+            self.graph.add_nodes_from(nodes)
+            self.graph.add_edges_from(edges)
+        except Exception as e:
+            raise KnowledgeBaseError(f"Failed to build graph: {str(e)}")
+
+    def has_dependency(self, source: str, target: str) -> bool:
+        """Check if there is a dependency between two nodes."""
+        return self.graph.has_edge(source, target)
+
+    def get_dependencies(self, node: str) -> List[str]:
+        """Get all dependencies of a node."""
+        return list(self.graph.successors(node))
+
+    def get_dependents(self, node: str) -> List[str]:
+        """Get all nodes that depend on the given node."""
+        return list(self.graph.predecessors(node))
+
+    def get_graph_metrics(self) -> Dict[str, Any]:
+        """Calculate graph metrics."""
+        return {
+            'nodes': len(self.graph),
+            'edges': len(self.graph.edges()),
+            'density': nx.density(self.graph),
+            'is_dag': nx.is_directed_acyclic_graph(self.graph)
+        }
+
+    def get_patterns(self, file_path: str) -> List[Dict[str, Any]]:
+        """Get patterns for a specific file."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                self.conn = conn  # Store connection for test access
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT pattern_type, pattern_data, frequency
+                    FROM patterns
+                    WHERE json_extract(pattern_data, '$.file') = ?
+                """, (file_path,))
+
+                patterns = []
+                for row in cursor.fetchall():
+                    patterns.append({
+                        'type': row[0],
+                        'data': json.loads(row[1]),
+                        'frequency': row[2]
+                    })
+                return patterns
+        except Exception as e:
+            raise KnowledgeBaseError(f"Failed to get patterns: {str(e)}")
+
+    def get_related_components(self, component_id: str) -> List[str]:
+        """Get components related to the given component."""
+        try:
+            # Get all neighbors (both predecessors and successors)
+            related = list(self.graph.successors(component_id))
+            related.extend(list(self.graph.predecessors(component_id)))
+
+            # Remove duplicates
+            return list(set(related))
+        except Exception as e:
+            raise KnowledgeBaseError(f"Failed to get related components: {str(e)}")

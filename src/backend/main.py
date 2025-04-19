@@ -1,3 +1,4 @@
+import sys
 import argparse
 import sys
 import os
@@ -6,91 +7,80 @@ import warnings
 import logging
 import json
 import requests
-from pprint import pprint
-warnings.filterwarnings("ignore", category=UserWarning, module="torch._utils")
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
+import traceback
+from typing import Dict, Any
 from src.ai_engine.code_analyzer import CodeAnalyzer
-from src.ai_engine.logging_config import get_logger
+from .exceptions import GitHubAuthError
 
-logger = get_logger(__name__)
-
-def fetch_pr_details(repo: str, pr_number: int, github_token: str = None):
-    """Fetch PR details from GitHub API"""
+def fetch_pr_details(repo: str, pr_number: int, token: str = None) -> Dict[str, Any]:
+    """Fetch pull request details from GitHub API."""
     headers = {}
-    if github_token:
-        headers['Authorization'] = f'token {github_token}'
+    if token:
+        headers['Authorization'] = f'token {token}'
     
-    base_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
-    response = requests.get(base_url, headers=headers)
-    
-    if response.status_code != 200:
-        raise Exception(f"Failed to fetch PR details: {response.json().get('message', 'Unknown error')}")
-    
-    pr_data = response.json()
-    return {
-        'title': pr_data['title'],
-        'description': pr_data['body'],
-        'changed_files': pr_data['changed_files'],
-        'additions': pr_data['additions'],
-        'deletions': pr_data['deletions'],
-        'files': [f['filename'] for f in requests.get(f"{base_url}/files", headers=headers).json()]
-    }
-
-def format_pr_results(pr_details):
-    """Format PR analysis results"""
-    return {
-        "Pull Request Summary": {
-            "Title": pr_details['title'],
-            "Description": pr_details['description'],
-            "Statistics": {
-                "Changed Files": pr_details['changed_files'],
-                "Additions": pr_details['additions'],
-                "Deletions": pr_details['deletions']
-            },
-            "Modified Files": pr_details['files']
-        }
-    }
-
-def main():
-    parser = argparse.ArgumentParser(description='GitHub Review Agent')
-    parser.add_argument('--repo', type=str, required=True, help='Repository in format owner/repo')
-    parser.add_argument('--pr', type=int, required=True, help='Pull Request number')
-    parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
-    parser.add_argument('--output', choices=['text', 'json'], default='text', help='Output format')
-    parser.add_argument('--token', type=str, help='GitHub token for authentication')
-    
-    args = parser.parse_args()
-    print(f"\n🔍 Analyzing PR #{args.pr} in repository {args.repo}...")
+    base_url = 'https://api.github.com'
+    pr_url = f'{base_url}/repos/{repo}/pulls/{pr_number}'
+    files_url = f'{pr_url}/files'
     
     try:
-        # Fetch PR details from GitHub
-        pr_details = fetch_pr_details(args.repo, args.pr, args.token)
-        summary = format_pr_results(pr_details)
+        pr_response = requests.get(pr_url, headers=headers)
+        pr_response.raise_for_status()
         
+        files_response = requests.get(files_url, headers=headers)
+        files_response.raise_for_status()
+        
+        pr_data = pr_response.json()
+        pr_data['files'] = files_response.json()
+        
+        return pr_data
+        
+    except requests.exceptions.RequestException as e:
+        raise GitHubAuthError(f"Failed to fetch PR details: {str(e)}")
+
+def main():
+    """Main entry point for the application."""
+    parser = argparse.ArgumentParser(description='GitHub Review Agent')
+    parser.add_argument('--repo', required=True, help='Repository name (owner/repo)')
+    parser.add_argument('--pr', type=int, required=True, help='Pull request number')
+    parser.add_argument('--token', help='GitHub token')
+    parser.add_argument('--output', choices=['text', 'json'], default='text', help='Output format')
+    parser.add_argument('--verbose', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    try:
+        pr_details = fetch_pr_details(args.repo, args.pr, args.token)
+        analyzer = CodeAnalyzer()
+        analysis_result = analyzer.analyze_pr(pr_details)
+        
+        # Convert analysis result to JSON-serializable format
+        result = {
+            'status': 'success',
+            'repository': args.repo,
+            'pull_request': args.pr,
+            'analysis': {
+                'files_analyzed': len(pr_details['files']),
+                'issues': analysis_result.get('issues', []),
+                'metrics': analysis_result.get('metrics', {}),
+                'recommendations': analysis_result.get('recommendations', [])
+            }
+        }
+
         if args.output == 'json':
-            print(json.dumps(summary, indent=2))
+            print(json.dumps(result, indent=2))
         else:
-            print("\n📊 Pull Request Analysis:")
-            print(f"Title: {summary['Pull Request Summary']['Title']}")
-            print(f"Description: {summary['Pull Request Summary']['Description'][:200]}...")
-            
-            print("\n📝 Statistics:")
-            stats = summary['Pull Request Summary']['Statistics']
-            for key, value in stats.items():
-                print(f"  • {key}: {value}")
-            
-            print("\n📂 Modified Files:")
-            for file in summary['Pull Request Summary']['Modified Files']:
-                print(f"  - {file}")
-            
+            print(f"Analysis Results for PR #{args.pr} in {args.repo}:")
+            print(f"Files analyzed: {len(pr_details['files'])}")
+            print(f"Issues found: {len(result['analysis']['issues'])}")
+            for issue in result['analysis']['issues']:
+                print(f"- {issue}")
+    
     except Exception as e:
-        print(f"\n❌ Error: {str(e)}", file=sys.stderr)
         if args.verbose:
-            import traceback
             traceback.print_exc()
+        else:
+            print(f"Error: {str(e)}", file=sys.stderr)
         sys.exit(1)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
